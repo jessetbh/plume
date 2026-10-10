@@ -1139,10 +1139,22 @@ namespace plume {
         bool allowOnlyBuffers = false;
     };
 
+    // [wcw hdr] Color space the swap chain presents in. SCRGB_LINEAR expects a float format
+    // (R16G16B16A16_FLOAT, linear, 1.0 = 80 nits); HDR10_ST2084 expects a 10-bit PQ-encoded format.
+    enum class RenderSwapChainColorSpace {
+        SRGB_NONLINEAR,
+        SCRGB_LINEAR,
+        HDR10_ST2084
+    };
+
     struct RenderSwapChainDesc {
         RenderWindow renderWindow = {};
         RenderFormat format = RenderFormat::UNKNOWN;
         uint32_t textureCount = 0;
+
+        // [wcw hdr] Requested color space; falls back to SRGB_NONLINEAR when the display path doesn't
+        // support it (see RenderSwapChain::getColorSpace).
+        RenderSwapChainColorSpace colorSpace = RenderSwapChainColorSpace::SRGB_NONLINEAR;
 
         // The capability for presentWait must be supported by the RenderDevice.
         bool enablePresentWait = false;

@@ -111,6 +111,7 @@ namespace plume {
         uint32_t refreshRate = 0;
         bool vsyncEnabled = true;
         UINT swapChainFlags = 0;
+        RenderSwapChainColorSpace colorSpace = RenderSwapChainColorSpace::SRGB_NONLINEAR;
 
         D3D12SwapChain(D3D12CommandQueue *commandQueue, const RenderSwapChainDesc &desc);
         ~D3D12SwapChain() override;
@@ -128,6 +129,8 @@ namespace plume {
         RenderWindow getWindow() const override;
         bool isEmpty() const override;
         uint32_t getRefreshRate() const override;
+        RenderSwapChainColorSpace getColorSpace() const override;
+        void applyColorSpace();
         void getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const;
         void setTextures();
     };

@@ -62,6 +62,8 @@ namespace plume {
     };
 
     static const std::unordered_set<std::string> OptionalInstanceExtensions = {
+        // [wcw hdr] Exposes the HDR (extended sRGB linear, HDR10) surface color spaces.
+        VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME,
 #   if defined(__APPLE__)
         // Tells the system Vulkan loader to enumerate portability drivers, if supported.
         VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
@@ -2200,7 +2202,6 @@ namespace plume {
         for (uint32_t i = 0; i < surfaceFormatCount; i++) {
             if (surfaceFormats[i].format == requestedFormat) {
                 compatibleSurfaceFormats.emplace_back(surfaceFormats[i]);
-                break;
             }
         }
 
@@ -2209,8 +2210,34 @@ namespace plume {
             return;
         }
 
+        // [wcw hdr] Prefer the requested HDR color space (listed only with VK_EXT_swapchain_colorspace).
+        VkColorSpaceKHR requestedColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        if (desc.colorSpace == RenderSwapChainColorSpace::SCRGB_LINEAR) {
+            requestedColorSpace = VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT;
+        }
+        else if (desc.colorSpace == RenderSwapChainColorSpace::HDR10_ST2084) {
+            requestedColorSpace = VK_COLOR_SPACE_HDR10_ST2084_EXT;
+        }
+
+        colorSpace = RenderSwapChainColorSpace::SRGB_NONLINEAR;
+        for (const VkSurfaceFormatKHR &surfaceFormat : compatibleSurfaceFormats) {
+            if (surfaceFormat.colorSpace == requestedColorSpace) {
+                pickedSurfaceFormat = surfaceFormat;
+                colorSpace = desc.colorSpace;
+                break;
+            }
+        }
+
+        if ((pickedSurfaceFormat.format == VK_FORMAT_UNDEFINED) && (desc.colorSpace != RenderSwapChainColorSpace::SRGB_NONLINEAR)) {
+            fprintf(stderr, "[plume] Swap chain color space %d is not supported by the surface; presenting as sRGB.\n", int(desc.colorSpace));
+        }
+
         // Pick the preferred color space, if not available, pick whatever first shows up on the list.
         for (const VkSurfaceFormatKHR &surfaceFormat : compatibleSurfaceFormats) {
+            if (pickedSurfaceFormat.format != VK_FORMAT_UNDEFINED) {
+                break;
+            }
+
             if (surfaceFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
                 pickedSurfaceFormat = surfaceFormat;
                 break;
@@ -2438,6 +2465,10 @@ namespace plume {
 
     bool VulkanSwapChain::isEmpty() const {
         return (vk == VK_NULL_HANDLE) || (width == 0) || (height == 0);
+    }
+
+    RenderSwapChainColorSpace VulkanSwapChain::getColorSpace() const {
+        return colorSpace;
     }
 
     uint32_t VulkanSwapChain::getRefreshRate() const {

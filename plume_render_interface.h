@@ -103,6 +103,9 @@ namespace plume {
 
         // Only valid if displayTiming is enabled in capabilities.
         virtual uint32_t getRefreshRate() const = 0;
+
+        // [wcw hdr] The color space actually in use (the requested one or SRGB_NONLINEAR).
+        virtual RenderSwapChainColorSpace getColorSpace() const = 0;
     };
 
     struct RenderFramebuffer {

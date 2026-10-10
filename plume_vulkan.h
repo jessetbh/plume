@@ -234,6 +234,7 @@ namespace plume {
         uint32_t height = 0;
         VkSwapchainCreateInfoKHR createInfo = {};
         VkSurfaceFormatKHR pickedSurfaceFormat = {};
+        RenderSwapChainColorSpace colorSpace = RenderSwapChainColorSpace::SRGB_NONLINEAR;
         VkPresentModeKHR createdPresentMode = VK_PRESENT_MODE_FIFO_KHR;
         VkPresentModeKHR requiredPresentMode = VK_PRESENT_MODE_FIFO_KHR;
         VkCompositeAlphaFlagBitsKHR pickedAlphaFlag = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -258,6 +259,7 @@ namespace plume {
         RenderWindow getWindow() const override;
         bool isEmpty() const override;
         uint32_t getRefreshRate() const override;
+        RenderSwapChainColorSpace getColorSpace() const override;
         void getWindowSize(uint32_t &dstWidth, uint32_t &dstHeight) const;
         void releaseSwapChain();
         void releaseImageViews();

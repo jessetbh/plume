@@ -1358,6 +1358,7 @@ namespace plume {
 
         d3d = static_cast<IDXGISwapChain3 *>(swapChain1);
         d3d->SetMaximumFrameLatency(desc.maxFrameLatency);
+        applyColorSpace();
         waitableObject = d3d->GetFrameLatencyWaitableObject();
 
         textures.resize(desc.textureCount);
@@ -1424,6 +1425,7 @@ namespace plume {
             return false;
         }
 
+        applyColorSpace();
         setTextures();
         return true;
     }
@@ -1490,6 +1492,38 @@ namespace plume {
 
     bool D3D12SwapChain::isEmpty() const {
         return (d3d == nullptr) || (width == 0) || (height == 0);
+    }
+
+    // [wcw hdr] Applies the requested color space, falling back to sRGB when the output can't present it.
+    void D3D12SwapChain::applyColorSpace() {
+        DXGI_COLOR_SPACE_TYPE dxgiColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+        switch (desc.colorSpace) {
+        case RenderSwapChainColorSpace::SCRGB_LINEAR:
+            dxgiColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+            break;
+        case RenderSwapChainColorSpace::HDR10_ST2084:
+            dxgiColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+            break;
+        default:
+            break;
+        }
+
+        colorSpace = RenderSwapChainColorSpace::SRGB_NONLINEAR;
+        if (desc.colorSpace == RenderSwapChainColorSpace::SRGB_NONLINEAR) {
+            return;
+        }
+
+        UINT support = 0;
+        if (SUCCEEDED(d3d->CheckColorSpaceSupport(dxgiColorSpace, &support)) && ((support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) != 0) && SUCCEEDED(d3d->SetColorSpace1(dxgiColorSpace))) {
+            colorSpace = desc.colorSpace;
+        }
+        else {
+            fprintf(stderr, "[plume] Swap chain color space %d is not supported by the output; presenting as sRGB.\n", int(desc.colorSpace));
+        }
+    }
+
+    RenderSwapChainColorSpace D3D12SwapChain::getColorSpace() const {
+        return colorSpace;
     }
 
     uint32_t D3D12SwapChain::getRefreshRate() const {

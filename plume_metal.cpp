@@ -2087,6 +2087,10 @@ namespace plume {
         return layer == nullptr || width == 0 || height == 0;
     }
 
+    RenderSwapChainColorSpace MetalSwapChain::getColorSpace() const {
+        return RenderSwapChainColorSpace::SRGB_NONLINEAR;
+    }
+
     uint32_t MetalSwapChain::getRefreshRate() const {
         return windowWrapper->getRefreshRate();
     }
