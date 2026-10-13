@@ -7,6 +7,7 @@
 
 #include "plume_d3d12.h"
 
+#include <atomic>
 #include <unordered_set>
 
 #include <dxgi1_5.h>
@@ -47,6 +48,60 @@ namespace plume {
     static const uint32_t ShaderDescriptorHeapSize = 65536;
     static const uint32_t SamplerDescriptorHeapSize = 1024;
     static const uint32_t TargetDescriptorHeapSize = 16384;
+
+    // [wcw] Device loss report: the first time a call sees the device removed (a GPU page fault or hang, usually a
+    // resource freed while the GPU still used it), logs the reason, and with WCW_DRED=1 (Device Removed Extended Data,
+    // enabled at device creation) the faulting address with the resources around it and the command lists in flight.
+    static void wcwReportDeviceRemoved(ID3D12Device *device, HRESULT result, const char *where) {
+        static std::atomic<bool> reported = false;
+        if ((device == nullptr) || reported.exchange(true)) {
+            return;
+        }
+
+        const HRESULT reason = device->GetDeviceRemovedReason();
+        fprintf(stderr, "[wcw gpu] DEVICE REMOVED at %s: result 0x%08lX, reason 0x%08lX\n", where, (unsigned long)result, (unsigned long)reason);
+        ID3D12DeviceRemovedExtendedData1 *dred = nullptr;
+        if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dred)))) {
+            fprintf(stderr, "[wcw gpu] (run with WCW_DRED=1 for the faulting resource and the command lists in flight)\n");
+            return;
+        }
+
+        D3D12_DRED_PAGE_FAULT_OUTPUT1 fault = {};
+        if (SUCCEEDED(dred->GetPageFaultAllocationOutput1(&fault))) {
+            fprintf(stderr, "[wcw gpu] page fault at GPU VA 0x%016llX\n", (unsigned long long)fault.PageFaultVA);
+            for (const D3D12_DRED_ALLOCATION_NODE1 *node = fault.pHeadExistingAllocationNode; node != nullptr; node = node->pNext) {
+                fprintf(stderr, "[wcw gpu]   live allocation near it: %ls (type %d)\n", node->ObjectNameW ? node->ObjectNameW : L"(unnamed)", int(node->AllocationType));
+            }
+
+            int freed = 0;
+            for (const D3D12_DRED_ALLOCATION_NODE1 *node = fault.pHeadRecentFreedAllocationNode; (node != nullptr) && (freed < 32); node = node->pNext, freed++) {
+                fprintf(stderr, "[wcw gpu]   recently FREED near it: %ls (type %d)\n", node->ObjectNameW ? node->ObjectNameW : L"(unnamed)", int(node->AllocationType));
+            }
+        }
+
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 crumbs = {};
+        if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput1(&crumbs))) {
+            int lists = 0;
+            for (const D3D12_AUTO_BREADCRUMB_NODE1 *node = crumbs.pHeadAutoBreadcrumbNode; (node != nullptr) && (lists < 16); node = node->pNext) {
+                const UINT done = (node->pLastBreadcrumbValue != nullptr) ? *node->pLastBreadcrumbValue : 0;
+                if (done >= node->BreadcrumbCount) {
+                    continue;
+                }
+
+                lists++;
+                fprintf(stderr, "[wcw gpu] unfinished command list %ls on queue %ls: %u of %u operations done, next op %d\n",
+                    node->pCommandListDebugNameW ? node->pCommandListDebugNameW : L"(unnamed)", node->pCommandQueueDebugNameW ? node->pCommandQueueDebugNameW : L"(unnamed)",
+                    done, node->BreadcrumbCount, (done < node->BreadcrumbCount) ? int(node->pCommandHistory[done]) : -1);
+            }
+        }
+
+        dred->Release();
+        fflush(stderr);
+    }
+
+    static bool wcwDeviceLost(HRESULT result) {
+        return (result == DXGI_ERROR_DEVICE_REMOVED) || (result == DXGI_ERROR_DEVICE_RESET) || (result == DXGI_ERROR_DEVICE_HUNG);
+    }
 
     // Common functions.
 
@@ -1395,6 +1450,10 @@ namespace plume {
         UINT syncInterval = (vsyncEnabled && !desc.enablePresentWait) ? 1 : 0;
         UINT flags = (!vsyncEnabled && tearingAllowed) ? DXGI_PRESENT_ALLOW_TEARING : 0;
         HRESULT res = d3d->Present(syncInterval, flags);
+        if (wcwDeviceLost(res)) {
+            wcwReportDeviceRemoved(commandQueue->device->d3d, res, "SwapChain::present");
+        }
+
         return SUCCEEDED(res);
     }
 
@@ -2819,7 +2878,12 @@ namespace plume {
         }
 
         void *outputData = nullptr;
-        d3d->Map(subresource, (readRange != nullptr) ? &range : nullptr, &outputData);
+        const HRESULT res = d3d->Map(subresource, (readRange != nullptr) ? &range : nullptr, &outputData);
+        if (FAILED(res)) {
+            // [wcw] A removed device fails every Map; callers then write through null (the settings-change crash).
+            wcwReportDeviceRemoved(device->d3d, res, "Buffer::map");
+        }
+
         return outputData;
     }
 
@@ -3687,6 +3751,16 @@ namespace plume {
         UINT adapterIndex = 0;
         IDXGIAdapter1 *adapterOption = nullptr;
         fprintf(stderr, "[d3d12dev] ctor start; enumerating adapters\n");
+        // [wcw] WCW_DRED=1: Device Removed Extended Data (breadcrumbs, page faults) for wcwReportDeviceRemoved.
+        if (getenv("WCW_DRED") != nullptr) {
+            ID3D12DeviceRemovedExtendedDataSettings1 *dredSettings = nullptr;
+            if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
+                dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                dredSettings->Release();
+                fprintf(stderr, "[wcw gpu] DRED enabled (breadcrumbs + page faults)\n");
+            }
+        }
         while (renderInterface->dxgiFactory->EnumAdapters1(adapterIndex++, &adapterOption) != DXGI_ERROR_NOT_FOUND) {
             DXGI_ADAPTER_DESC1 adapterDesc;
             adapterOption->GetDesc1(&adapterDesc);
