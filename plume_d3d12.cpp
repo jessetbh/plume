@@ -1491,14 +1491,26 @@ namespace plume {
             return false;
         }
 
+        // [wcw] A lost device can't resize: a failed ResizeBuffers left the buffers released, and the next resize
+        // released them again (a null read after device loss).
+        if (wcwDeviceLostFlag().load()) {
+            return false;
+        }
+
         for (uint32_t i = 0; i < desc.textureCount; i++) {
-            textures[i].d3d->Release();
-            textures[i].d3d = nullptr;
+            if (textures[i].d3d != nullptr) {
+                textures[i].d3d->Release();
+                textures[i].d3d = nullptr;
+            }
         }
 
         HRESULT res = d3d->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, swapChainFlags);
         if (FAILED(res)) {
             fprintf(stderr, "ResizeBuffers failed with error code 0x%lX.\n", res);
+            if (wcwDeviceLost(res)) {
+                wcwReportDeviceRemoved(commandQueue->device->d3d, res, "SwapChain::resize");
+            }
+
             return false;
         }
 
