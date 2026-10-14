@@ -7,6 +7,8 @@
 
 #include "plume_d3d12.h"
 
+#include <chrono>
+#include <thread>
 #include <atomic>
 #include <unordered_set>
 
@@ -53,6 +55,7 @@ namespace plume {
     // resource freed while the GPU still used it), logs the reason, and with WCW_DRED=1 (Device Removed Extended Data,
     // enabled at device creation) the faulting address with the resources around it and the command lists in flight.
     static void wcwReportDeviceRemoved(ID3D12Device *device, HRESULT result, const char *where) {
+        wcwDeviceLostFlag() = true;
         static std::atomic<bool> reported = false;
         if ((device == nullptr) || reported.exchange(true)) {
             return;
@@ -92,6 +95,21 @@ namespace plume {
                 fprintf(stderr, "[wcw gpu] unfinished command list %ls on queue %ls: %u of %u operations done, next op %d\n",
                     node->pCommandListDebugNameW ? node->pCommandListDebugNameW : L"(unnamed)", node->pCommandQueueDebugNameW ? node->pCommandQueueDebugNameW : L"(unnamed)",
                     done, node->BreadcrumbCount, (done < node->BreadcrumbCount) ? int(node->pCommandHistory[done]) : -1);
+
+                // The operations around the hang (D3D12_AUTO_BREADCRUMB_OP values: 3 DrawInstanced, 6 Dispatch,
+                // 7 CopyBufferRegion, 8 CopyTextureRegion, 12 ClearRenderTargetView, 14 ResourceBarrier, ...).
+                const UINT first = (done > 24) ? (done - 24) : 0;
+                const UINT last = std::min(done + 8, node->BreadcrumbCount);
+                fprintf(stderr, "[wcw gpu]   ops %u..%u:", first, last - 1);
+                for (UINT i = first; i < last; i++) {
+                    fprintf(stderr, (i == done) ? " [%d]" : " %d", int(node->pCommandHistory[i]));
+                }
+
+                fprintf(stderr, "\n");
+                for (UINT c = 0; c < node->BreadcrumbContextsCount; c++) {
+                    const D3D12_DRED_BREADCRUMB_CONTEXT &context = node->pBreadcrumbContexts[c];
+                    fprintf(stderr, "[wcw gpu]   marker at op %u: %ls\n", context.BreadcrumbIndex, context.pContextString ? context.pContextString : L"");
+                }
             }
         }
 
@@ -2724,7 +2742,15 @@ namespace plume {
         }
     }
 
+    void D3D12CommandList::setName(const std::string &name) {
+        setObjectName(d3d, name);
+    }
+
     // D3D12CommandQueue
+
+    void D3D12CommandQueue::setName(const std::string &name) {
+        setObjectName(d3d, name);
+    }
 
     D3D12CommandQueue::D3D12CommandQueue(D3D12Device *device, RenderCommandListType type) {
         assert(device != nullptr);
@@ -2878,16 +2904,30 @@ namespace plume {
         }
 
         void *outputData = nullptr;
-        const HRESULT res = d3d->Map(subresource, (readRange != nullptr) ? &range : nullptr, &outputData);
-        if (FAILED(res)) {
-            // [wcw] A removed device fails every Map; callers then write through null (the settings-change crash).
+        // [wcw] A removed device fails every Map (and resource creation, leaving d3d null); callers then wrote through
+        // null in several threads at once (the settings-change crash). Hand out scratch memory instead: the writes go
+        // nowhere, and the application sees wcwDeviceLostFlag and quits cleanly.
+        const HRESULT res = (d3d != nullptr) ? d3d->Map(subresource, (readRange != nullptr) ? &range : nullptr, &outputData) : DXGI_ERROR_DEVICE_REMOVED;
+        if (FAILED(res) || (outputData == nullptr)) {
             wcwReportDeviceRemoved(device->d3d, res, "Buffer::map");
+            wcwDeviceLostFlag() = true;
+            if (wcwLostScratch.size() < desc.size) {
+                wcwLostScratch.resize(size_t(desc.size));
+            }
+
+            wcwLostMapped = true;
+            return wcwLostScratch.data();
         }
 
         return outputData;
     }
 
     void D3D12Buffer::unmap(uint32_t subresource, const RenderRange *writtenRange) {
+        if (wcwLostMapped || (d3d == nullptr)) {
+            wcwLostMapped = false;
+            return;
+        }
+
         D3D12_RANGE range;
         if (writtenRange != nullptr) {
             range.Begin = writtenRange->begin;
@@ -3996,6 +4036,21 @@ namespace plume {
         res = timestampCommandQueue->d3d->GetTimestampFrequency(&timestampFrequency);
         if (FAILED(res)) {
             fprintf(stderr, "GetTimestampFrequency failed with error code 0x%lX. Timestamps will be inaccurate.\n", res);
+        }
+
+        // [wcw] WCW_GPU_REMOVE_AFTER=<seconds>: remove the device on purpose after that long (ID3D12Device5::RemoveDevice),
+        // to test what the application does on device loss without waiting for a real GPU hang.
+        if (const char *removeText = getenv("WCW_GPU_REMOVE_AFTER")) {
+            const int removeSeconds = atoi(removeText);
+            ID3D12Device5 *device5 = nullptr;
+            if ((removeSeconds > 0) && SUCCEEDED(d3d->QueryInterface(IID_PPV_ARGS(&device5)))) {
+                std::thread([device5, removeSeconds]() {
+                    std::this_thread::sleep_for(std::chrono::seconds(removeSeconds));
+                    fprintf(stderr, "[wcw gpu] WCW_GPU_REMOVE_AFTER=%d: removing the device\n", removeSeconds);
+                    device5->RemoveDevice();
+                    device5->Release();
+                }).detach();
+            }
         }
     }
 
