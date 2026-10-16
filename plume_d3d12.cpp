@@ -842,6 +842,12 @@ namespace plume {
     }
 
     static void setObjectName(ID3D12Object *object, const std::string &name) {
+        // [wcw] After device loss, object creation fails and leaves the object null (the texture upload thread crashed
+        // naming one).
+        if (object == nullptr) {
+            return;
+        }
+
         const std::wstring wideCharName = Utf8ToUtf16(name);
         object->SetName(wideCharName.c_str());
     }
@@ -2897,6 +2903,11 @@ namespace plume {
         HRESULT res = device->allocator->CreateResource(&allocationDesc, &resourceDesc, resourceStates, nullptr, &allocation, IID_PPV_ARGS(&d3d));
         if (FAILED(res)) {
             fprintf(stderr, "CreateResource failed with error code 0x%lX.\n", res);
+            // [wcw] Set the device-lost flag as early as possible, so the renderer threads stop before using the null resource.
+            if (FAILED(device->d3d->GetDeviceRemovedReason())) {
+                wcwReportDeviceRemoved(device->d3d, res, "Buffer::create");
+            }
+
             return;
         }
     }
@@ -3032,6 +3043,11 @@ namespace plume {
         HRESULT res = device->allocator->CreateResource(&allocationDesc, &resourceDesc, resourceStates, (desc.optimizedClearValue != nullptr) ? &optimizedClearValue : nullptr, &allocation, IID_PPV_ARGS(&d3d));
         if (FAILED(res)) {
             fprintf(stderr, "CreateResource failed with error code 0x%lX.\n", res);
+            // [wcw] Set the device-lost flag as early as possible, so the renderer threads stop before using the null resource.
+            if (FAILED(device->d3d->GetDeviceRemovedReason())) {
+                wcwReportDeviceRemoved(device->d3d, res, "Texture::create");
+            }
+
             return;
         }
     }
@@ -4206,7 +4222,8 @@ namespace plume {
             instanceDesc.InstanceMask = instance.instanceMask;
             instanceDesc.InstanceContributionToHitGroupIndex = instance.instanceContributionToHitGroupIndex;
             instanceDesc.Flags = instance.cullDisable ? D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE : D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
-            instanceDesc.AccelerationStructure = interfaceBottomLevelAS->d3d->GetGPUVirtualAddress() + instance.bottomLevelAS.offset;
+            // [wcw] A bottom level AS created after device loss has no resource (the render thread crashed here).
+            instanceDesc.AccelerationStructure = (interfaceBottomLevelAS->d3d != nullptr) ? (interfaceBottomLevelAS->d3d->GetGPUVirtualAddress() + instance.bottomLevelAS.offset) : 0;
             memcpy(instanceDesc.Transform, instance.transform.m, sizeof(instanceDesc.Transform));
         }
 
