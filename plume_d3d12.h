@@ -190,6 +190,7 @@ namespace plume {
 
         D3D12CommandList(D3D12CommandQueue *queue);
         ~D3D12CommandList() override;
+        void setName(const std::string &name) override;
         void begin() override;
         void end() override;
         void barriers(RenderBarrierStages stages, const RenderBufferBarrier *bufferBarriers, uint32_t bufferBarriersCount, const RenderTextureBarrier *textureBarriers, uint32_t textureBarriersCount) override;
@@ -265,6 +266,7 @@ namespace plume {
 
         D3D12CommandQueue(D3D12Device *device, RenderCommandListType type);
         ~D3D12CommandQueue() override;
+        void setName(const std::string &name) override;
         std::unique_ptr<RenderCommandList> createCommandList() override;
         std::unique_ptr<RenderSwapChain> createSwapChain(const RenderSwapChainDesc &desc) override;
         void executeCommandLists(const RenderCommandList **commandLists, uint32_t commandListCount, RenderCommandSemaphore **waitSemaphores, uint32_t waitSemaphoreCount, RenderCommandSemaphore **signalSemaphores, uint32_t signalSemaphoreCount, RenderCommandFence *signalFence) override;
@@ -278,6 +280,9 @@ namespace plume {
         D3D12MA::Allocation *allocation = nullptr;
         D3D12Pool *pool = nullptr;
         RenderBufferDesc desc;
+        // [wcw] Stand-in for map() after the device is lost (see wcwDeviceLostFlag).
+        std::vector<uint8_t> wcwLostScratch;
+        bool wcwLostMapped = false;
 
         D3D12Buffer() = default;
         D3D12Buffer(D3D12Device *device, D3D12Pool *pool, const RenderBufferDesc &desc);

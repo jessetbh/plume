@@ -7,11 +7,20 @@
 
 #pragma once
 
+#include <atomic>
 #include <climits>
 
 #include "plume_render_interface_types.h"
 
 namespace plume {
+    // [wcw] Set once the GPU device is lost (removed, hung or reset). From then on the D3D12 backend hands out scratch
+    // memory instead of failing buffer maps, so the renderer threads keep running until the application quits; the
+    // application polls this to quit cleanly instead of crashing in several threads at once.
+    inline std::atomic<bool> &wcwDeviceLostFlag() {
+        static std::atomic<bool> flag(false);
+        return flag;
+    }
+
     // Interfaces.
 
     struct RenderBufferFormattedView {
@@ -116,6 +125,8 @@ namespace plume {
 
     struct RenderCommandList {
         virtual ~RenderCommandList() { }
+        // [wcw] Debug name (D3D12: shows in DRED device-loss reports). Optional for backends.
+        virtual void setName(const std::string &name) { }
         virtual void begin() = 0;
         virtual void end() = 0;
         virtual void barriers(RenderBarrierStages stages, const RenderBufferBarrier *bufferBarriers, uint32_t bufferBarriersCount, const RenderTextureBarrier *textureBarriers, uint32_t textureBarriersCount) = 0;
@@ -202,6 +213,8 @@ namespace plume {
 
     struct RenderCommandQueue {
         virtual ~RenderCommandQueue() { }
+        // [wcw] Debug name (D3D12: shows in DRED device-loss reports). Optional for backends.
+        virtual void setName(const std::string &name) { }
         virtual std::unique_ptr<RenderCommandList> createCommandList() = 0;
         virtual std::unique_ptr<RenderSwapChain> createSwapChain(const RenderSwapChainDesc &desc) = 0;
         virtual void executeCommandLists(const RenderCommandList **commandLists, uint32_t commandListCount, RenderCommandSemaphore **waitSemaphores = nullptr, uint32_t waitSemaphoreCount = 0, RenderCommandSemaphore **signalSemaphores = nullptr, uint32_t signalSemaphoreCount = 0, RenderCommandFence *signalFence = nullptr) = 0;
