@@ -2855,7 +2855,13 @@ namespace plume {
         assert(fence != nullptr);
 
         D3D12CommandFence *interfaceFence = static_cast<D3D12CommandFence *>(fence);
-        WaitForSingleObjectEx(interfaceFence->fenceEvent, INFINITE, FALSE);
+        // [wcw fix] Wait for the value the last submit signals, not just for the auto-reset event: an event left set
+        // by an earlier completion returned while the newest work was still running (aki-roadmap#4). A removed device
+        // reports UINT64_MAX, which ends the wait.
+        const UINT64 lastSignaled = interfaceFence->fenceValue - 1;
+        while (interfaceFence->d3d->GetCompletedValue() < lastSignaled) {
+            WaitForSingleObjectEx(interfaceFence->fenceEvent, INFINITE, FALSE);
+        }
     }
 
     // D3D12Buffer
